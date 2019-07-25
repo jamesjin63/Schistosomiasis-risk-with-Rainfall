@@ -1,0 +1,231 @@
+---
+title: "Plot Raster with ggplot2"
+author: "Anderson"
+date: "2019/7/25"
+output:
+  word_document: default
+  html_document:
+    df_print: paged
+---
+
+## 1.Backgroud
+随着信息化时代的快速发展，利用气象因素来预测传染病的应用已经有很多了。譬如根据降雨量及温度和湿度等气象因素，估计蚊子的生长繁衍风险区。
+
+随着我国血吸虫（一种传染性寄生虫病）病的消除工作进行，血吸虫病主要发生在长江流域。
+为探究降雨季节导致的洪水效应，是否可引起血吸虫病的传播与流行。
+
+本文借助于**R**平台，用降雨量来预测血吸虫病的流行风险变化。<https://mp.weixin.qq.com/s/5vvhxqfCNy5QpW7H1rg_rA>.
+
+
+
+## 2.Data 
+
+我们收集了168小时的降水预报，以及血吸虫病中间宿主的钉螺现场数据。已经将降雨量及血吸虫病数据导入Rdata数据集。其中包括地图文件。
+
+注意：
+
+ * CHNshp是地图文件Polygon
+ * sch也是地图文件Polygon，主要的血吸虫流行区
+ * Snail是栅格文件raster，存储钉螺调查数据（已经标化转换不适用于二次挖掘）
+
+### 2.1 导入数据
+```{r,warning=FALSE,message=FALSE}
+#load packages
+  library(raster)
+  library(sp)
+  library(maptools)
+  library(dplyr)
+  library(dismo)
+  library(rgdal)
+  library(leaflet)
+  library(knitr)
+  library(ggplot2)
+#load R.data
+load("D:/partime job/NIPDmete/Flood/CHNshp.RData")
+load("D:/partime job/NIPDmete/Flood/snail.RData")
+rainfall=ersum(20190725) #ersum是一个计算累积10天降雨量的函数；这里取7月25日降水量
+
+```
+
+### 2.2 数据格式化
+因为降雨量数据是全国的，但是血吸虫病数据是流行地区的数据，现在要将降雨量与血吸虫病数据进行叠加，因为文献报道，血吸虫病可能洪水进行扩散，两者关系为正相关。
+第一步，对降雨量与血吸虫病数据进行抠图，剪切至相同大小的extent。
+第二步，降雨量与血吸虫病回归叠加。
+
+```{r,warning=FALSE,message=FALSE}
+#1.crop to the same shp
+rainfall_H=mask(rainfall,sch)
+snail_H=mask(snail,sch)
+
+#extent
+extent(rainfall_H)
+#set into same extend
+rasterDF = raster(ext=extent(69.975, 140.025, -0.025, 
+                             60.025), res=c(0.05,0.05))
+snail_H=raster::resample(snail_H,rasterDF, method='bilinear')
+
+#2.calc the ch and total_rainfall
+totyal= overlay(rainfall_H,snail_H,fun=function(r1, r2){return(r1*r2/10000)})
+```
+
+## 3.Plot the map
+接下来对裁剪好的降雨量及预测风险totyal进行画图，
+我们利用ggplot2包制图
+首先将我们的raster栅格数据转换成ggplot能识别的格式，然后利用 geom_raster加载栅格数据。
+
+### 3.1 Rainfall
+
+```{r,warning=FALSE,message=FALSE}
+#change the raster into dataframe
+df.rainfall=as.data.frame(rainfall,xy=T) %>% na.omit(df.rainfall)
+colnames(df.rainfall)=c("x","y","rainfall")
+head(df.rainfall)
+
+#plot rainfall
+ggplot(df.rainfall) +
+  geom_raster(aes(x,y,fill=rainfall))+
+  coord_quickmap()
+
+```
+
+
+### 3.1 Risk level
+
+```{r,warning=FALSE,message=FALSE}
+#change the raster into dataframe
+df.snail=as.data.frame(totyal,xy=T)%>% na.omit(df.snail)
+colnames(df.snail)=c("x","y","risk")
+
+#plot sanil
+ggplot(df.snail) +
+  geom_raster(aes(x,y,fill=risk))+
+  coord_quickmap()
+
+```
+
+### 3.3 Risk with Rainfall
+接下来就是对两个图层进行叠加，可以google，multi-raster。
+我们可以看到降雨量采用了geom_tile用colour去调取降雨量的颜色。
+而血吸虫病是根据 geom_raster里面的fill去调色。
+我们看一下效果。
+```{r,warning=FALSE,message=FALSE}
+#two raster
+# plot looks fine
+ggplot() + 
+  geom_tile(data=df.rainfall, aes(x,y,colour=rainfall), fill="transparent") +
+  scale_color_gradientn(colours = terrain.colors(7))+
+  
+  geom_raster(data=df.snail, aes(x,y,fill=risk)) +
+  scale_fill_gradient(low="white", high="red", na.value="transparent") + 
+  
+  ggtitle("Risk with Rainfall") +
+  coord_quickmap()
+```
+上面的效果并不是很好，额不能调色。是默认的色调。
+接下来我们进一步改进。
+
+### 3.3.1 降雨量调色
+
+其中我们调用了cut函数，将连续性的变量进行分类，将降雨量分成6个类别。
+利用scale_fill_manual对降雨量的颜色进行定制。参考：<http://colorbrewer2.org/#type=sequential&scheme=Reds&n=8>
+```{r,warning=FALSE,message=FALSE}
+# set into diffrent grades
+####Rainfall
+df.rainfall_level=df.rainfall %>% 
+  mutate(Rcut=cut(rainfall,breaks=c(-1,10,25,50,100,250,900)),
+         Rcut=factor(Rcut,labels = c("0-10","10-25","25-50",
+                                     "50-100","100-250",">250")))
+ggplot() + 
+  geom_raster(data=df.rainfall_level, aes(x,y,fill=Rcut)) +
+  scale_fill_manual(values=c("#9ECAE1" ,"#6BAED6", "#4292C6" ,"#2171B5" ,"#08519C","#08306B"),
+                    na.value="transparent") +
+  ggtitle("Risk with Rainfall") +
+  coord_quickmap()
+
+```
+
+我们加上中国各个省份的边界线
+
+```{r,warning=FALSE,message=FALSE}
+
+China=fortify(CHNshp)
+
+ggplot() + 
+  geom_raster(data=df.rainfall_level, aes(x,y,fill=Rcut)) +
+  scale_fill_manual(values=c("#9ECAE1" ,"#6BAED6", "#4292C6" ,"#2171B5","#08519C","#08306B"),na.value="transparent") +
+  geom_polygon(data=China, aes(long, lat, group = group),fill=NA, color = "black", size = 0.05) +
+  ggtitle("Risk with Rainfall") +
+  coord_quickmap()
+```
+
+
+
+### 3.3.2 血吸虫风险调色
+
+其中我们调用了cut函数，将连续性的变量进行分类，将血吸虫病风险分成4个等级。
+从1-4级，其中1级为最严重。对分险等级进行自定义调色 scale_fill_manual,参考：<http://colorbrewer2.org/#type=sequential&scheme=Reds&n=8>
+
+```{r,warning=FALSE,message=FALSE}
+####risk
+df.snail_level=df.snail %>% 
+  mutate(level=cut(risk,breaks=c(-1,0.2,1,5,500)),
+         level=factor(level,labels = c("Level 4","Level 3","Level 2","Level 1")))
+
+ggplot() + 
+  geom_raster(data=df.snail_level, aes(x,y,fill=level)) +
+  scale_fill_manual(values=c(
+    "#fee0d2","#FC8D59", "#EF6548", "#D7301F" ))+
+  ggtitle("Risk with Rainfall") +
+  coord_quickmap()
+
+```
+
+
+### 3.3.3 两者图层叠加
+
+```{r,warning=FALSE,message=FALSE}
+#two raster
+# plot looks fine
+ggplot() + 
+  geom_tile(data=df.rainfall_level, aes(x,y,colour=Rcut), fill="transparent") +
+  scale_colour_manual(name="Cumulative Rainfall",
+                      values=c("#9ECAE1" ,"#6BAED6", "#4292C6" ,"#2171B5" ,"#08519C","#08306B"),
+                      na.value="transparent") +
+  
+  geom_raster(data=df.snail_level, aes(x,y,fill=level)) +
+  scale_fill_manual(name="Sch.Risk",
+                    values=c("#FDBB84","#FC8D59", "#EF6548", "#D7301F" )) + 
+  geom_polygon(data=China, aes(long, lat, group = group),fill=NA, color = "black", size = 0.05)+
+  #
+  ggtitle("Risk with Rainfall 2019-07-25") +
+  coord_quickmap()
+
+```
+
+
+
+参考资料
+
+画图
+
+#http://www.sthda.com/english/wiki/ggplot2-colors-how-to-change-colors-automatically-and-manually
+#https://ggplot2.tidyverse.org/reference/scale_alpha.html
+#http://colorbrewer2.org/#type=sequential&scheme=Reds&n=8
+
+数据处理
+
+#https://stackoverflow.com/questions/6104836/splitting-a-continuous-variable-into-equal-sized-groups
+
+合成栅格
+
+#https://datacarpentry.org/r-raster-vector-geospatial/02-raster-plot/
+
+risk factor
+
+#https://www.ncbi.nlm.nih.gov/pmc/articles/PMC3749985/
+#https://www.ncbi.nlm.nih.gov/pmc/articles/PMC5530530/
+
+
+
+
+
