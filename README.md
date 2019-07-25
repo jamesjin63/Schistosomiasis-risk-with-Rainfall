@@ -10,5 +10,7 @@ For this project, mainly focus on ggplot with mapping, setting the rainfall into
 changed into raster, then, adding two rasters into one map through ggplot2.
 
 1.Shapefile data(snail.RData;CHNshp.RData)
+
 2.Rmd code to creat the HTML(PublishFlood.Rmd)
+
 3.Source code to plot(Auto-plot.R)
